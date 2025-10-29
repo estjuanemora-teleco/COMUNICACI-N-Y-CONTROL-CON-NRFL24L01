@@ -1,0 +1,88 @@
+from machine import Pin, SPI, I2C, PWM
+from time import sleep, ticks_ms, ticks_diff
+from nrf24l01 import NRF24L01
+from ssd1306 import SSD1306_I2C
+
+# -----------------------
+# CONFIGURACIÓN NRF24L01
+# -----------------------
+spi = SPI(0, sck=Pin(6), mosi=Pin(7), miso=Pin(4))
+csn = Pin(14, Pin.OUT, value=1)
+ce = Pin(15, Pin.OUT, value=0)
+
+radio = NRF24L01(spi, csn, ce, payload_size=32)
+address = b"00001"
+radio.open_rx_pipe(1, address)
+radio.start_listening()
+
+# -----------------------
+# CONFIGURACIÓN OLED
+# -----------------------
+i2c = I2C(0, scl=Pin(13), sda=Pin(12))
+oled = SSD1306_I2C(128, 64, i2c)
+
+# -----------------------
+# CONFIGURACIÓN SERVO
+# -----------------------
+servo = PWM(Pin(16))
+servo.freq(50)
+
+def set_servo_angle(angle):
+    min_duty, max_duty = 1638, 8192
+    angle = max(0, min(180, angle))
+    duty = int(min_duty + (angle / 180) * (max_duty - min_duty))
+    servo.duty_u16(duty)
+    return angle
+
+# -----------------------
+# INICIALIZACIÓN
+# -----------------------
+oled.fill(0)
+oled.text("📡 RECEPTOR NRF24", 0, 0)
+oled.text("Esperando datos...", 0, 20)
+oled.show()
+print("📡 Esperando datos...")
+
+last_update = ticks_ms()
+ax = ay = az = 0
+angulo = 0
+
+while True:
+    if radio.any():
+        try:
+            payload = radio.recv()
+            msg = payload.decode('utf-8', 'ignore').strip('\x00\r\n ')
+            print("Mensaje recibido:", msg)
+
+            # Validar formato básico
+            if "ANG:" in msg and "|A:" in msg:
+                parts = msg.split('|')
+                for part in parts:
+                    part = part.strip()
+                    if part.startswith('ANG:'):
+                        angulo = int(part[4:]) if part[4:].isdigit() else angulo
+                    elif part.startswith('A:'):
+                        try:
+                            ax, ay, az = map(float, part[2:].split(','))
+                        except:
+                            pass
+
+                set_servo_angle(angulo)
+
+        except Exception as e:
+            print("⚠️ Error:", e)
+
+    # Actualización de OLED cada 300 ms
+    if ticks_diff(ticks_ms(), last_update) > 10:
+        oled.fill(0)
+        oled.text("ACELEROMETRO", 15, 0)
+        oled.hline(0, 12, 128, 1)
+        oled.text(f"Angulo: {angulo:3d}°", 10, 18)
+        oled.text(f"X: {ax:6.2f}g", 10, 32)
+        oled.text(f"Y: {ay:6.2f}g", 10, 44)
+        oled.text(f"Z: {az:6.2f}g", 10, 56)
+        oled.show()
+        last_update = ticks_ms()
+
+    sleep(0.005)
+
